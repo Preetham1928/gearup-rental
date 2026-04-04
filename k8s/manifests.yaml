@@ -1,0 +1,247 @@
+# ════════════════════════════════════════════════════════════
+#  RentForge — Kubernetes Manifests
+#  Course: 23CS102PE405 — DevOps & Full Stack | SR University
+# ════════════════════════════════════════════════════════════
+
+---
+# Namespace
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: production
+  labels:
+    app: rentforge
+
+---
+# ── ConfigMap ───────────────────────────────────────────────
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: rentforge-config
+  namespace: production
+data:
+  NODE_ENV: "production"
+  PORT: "5000"
+  PG_HOST: "postgres-service"
+  PG_PORT: "5432"
+  PG_DATABASE: "rentforge"
+  MONGO_URI: "mongodb://mongo-service:27017/rentforge"
+  CLIENT_URL: "https://rentforge.io"
+
+---
+# ── Secret ──────────────────────────────────────────────────
+apiVersion: v1
+kind: Secret
+metadata:
+  name: rentforge-secrets
+  namespace: production
+type: Opaque
+data:
+  # base64 encoded values — replace in production
+  JWT_SECRET: c3VwZXJfc2VjcmV0X2p3dF9rZXk=
+  PG_USER: cG9zdGdyZXM=
+  PG_PASSWORD: cG9zdGdyZXM=
+
+---
+# ── Backend Deployment ──────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rentforge-api
+  namespace: production
+  labels:
+    app: rentforge
+    component: api
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: rentforge
+      component: api
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: rentforge
+        component: api
+    spec:
+      containers:
+        - name: api
+          image: registry.rentforge.io/rentforge-api:latest
+          ports:
+            - containerPort: 5000
+          envFrom:
+            - configMapRef:
+                name: rentforge-config
+            - secretRef:
+                name: rentforge-secrets
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 5000
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 5000
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          volumeMounts:
+            - name: logs
+              mountPath: /app/logs
+      volumes:
+        - name: logs
+          emptyDir: {}
+
+---
+# ── Backend Service ─────────────────────────────────────────
+apiVersion: v1
+kind: Service
+metadata:
+  name: rentforge-api-service
+  namespace: production
+spec:
+  selector:
+    app: rentforge
+    component: api
+  ports:
+    - protocol: TCP
+      port: 5000
+      targetPort: 5000
+  type: ClusterIP
+
+---
+# ── Frontend Deployment ─────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rentforge-frontend
+  namespace: production
+  labels:
+    app: rentforge
+    component: frontend
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: rentforge
+      component: frontend
+  template:
+    metadata:
+      labels:
+        app: rentforge
+        component: frontend
+    spec:
+      containers:
+        - name: frontend
+          image: registry.rentforge.io/rentforge-frontend:latest
+          ports:
+            - containerPort: 80
+          resources:
+            requests:
+              memory: "64Mi"
+              cpu: "100m"
+            limits:
+              memory: "128Mi"
+              cpu: "200m"
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 10
+            periodSeconds: 10
+
+---
+# ── Frontend Service ────────────────────────────────────────
+apiVersion: v1
+kind: Service
+metadata:
+  name: rentforge-frontend-service
+  namespace: production
+spec:
+  selector:
+    app: rentforge
+    component: frontend
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 80
+  type: ClusterIP
+
+---
+# ── Ingress ─────────────────────────────────────────────────
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: rentforge-ingress
+  namespace: production
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+spec:
+  tls:
+    - hosts:
+        - rentforge.io
+        - api.rentforge.io
+      secretName: rentforge-tls
+  rules:
+    - host: rentforge.io
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: rentforge-frontend-service
+                port:
+                  number: 80
+    - host: api.rentforge.io
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: rentforge-api-service
+                port:
+                  number: 5000
+
+---
+# ── HorizontalPodAutoscaler ─────────────────────────────────
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: rentforge-api-hpa
+  namespace: production
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: rentforge-api
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80

@@ -1,0 +1,154 @@
+// ════════════════════════════════════════════════════════════
+//  RentForge — Jenkinsfile (Pipeline as Code)
+//  Course: 23CS102PE405 — DevOps & Full Stack | SR University
+// ════════════════════════════════════════════════════════════
+
+pipeline {
+    agent any
+
+    environment {
+        APP_NAME      = 'rentforge'
+        REGISTRY      = 'registry.rentforge.io'
+        BACKEND_IMG   = "${REGISTRY}/${APP_NAME}-api"
+        FRONTEND_IMG  = "${REGISTRY}/${APP_NAME}-frontend"
+        K8S_NAMESPACE = 'production'
+        DOCKER_CREDS  = credentials('docker-registry-creds')
+        KUBECONFIG    = credentials('kubeconfig')
+    }
+
+    options {
+        buildDiscarder(logRotator(numToKeepStr: '10'))
+        timeout(time: 30, unit: 'MINUTES')
+        timestamps()
+    }
+
+    stages {
+        // ── Stage 1: Checkout ─────────────────────────────────
+        stage('Source') {
+            steps {
+                checkout scm
+                echo "✅ Source checked out — Branch: ${env.GIT_BRANCH}"
+                sh 'git log --oneline -5'
+            }
+        }
+
+        // ── Stage 2: Install Dependencies ────────────────────
+        stage('Build') {
+            parallel {
+                stage('Backend') {
+                    steps {
+                        dir('backend') {
+                            sh 'npm ci'
+                            echo '✅ Backend dependencies installed'
+                        }
+                    }
+                }
+                stage('Frontend') {
+                    steps {
+                        dir('frontend') {
+                            sh 'npm ci'
+                            echo '✅ Frontend dependencies installed'
+                        }
+                    }
+                }
+            }
+        }
+
+        // ── Stage 3: Unit Tests ───────────────────────────────
+        stage('Unit Tests') {
+            steps {
+                dir('backend') {
+                    sh 'npm test -- --coverage --ci'
+                    publishHTML(target: [
+                        allowMissing: false,
+                        alwaysLinkToLastBuild: true,
+                        keepAll: true,
+                        reportDir: 'coverage',
+                        reportFiles: 'index.html',
+                        reportName: 'Test Coverage Report'
+                    ])
+                }
+            }
+            post {
+                always {
+                    junit 'backend/coverage/junit.xml'
+                }
+            }
+        }
+
+        // ── Stage 4: Integration Tests ────────────────────────
+        stage('Integration Tests') {
+            when { branch 'main' }
+            steps {
+                sh '''
+                    docker-compose -f docker/docker-compose.yml up -d postgres mongo
+                    sleep 10
+                    cd backend && NODE_ENV=test npm run test:integration
+                    docker-compose -f docker/docker-compose.yml down
+                '''
+            }
+        }
+
+        // ── Stage 5: Docker Build & Push ──────────────────────
+        stage('Docker Build') {
+            steps {
+                sh "echo ${DOCKER_CREDS_PSW} | docker login ${REGISTRY} -u ${DOCKER_CREDS_USR} --password-stdin"
+                parallel(
+                    'Backend Image': {
+                        sh """
+                            docker build -t ${BACKEND_IMG}:${BUILD_NUMBER} -t ${BACKEND_IMG}:latest ./backend
+                            docker push ${BACKEND_IMG}:${BUILD_NUMBER}
+                            docker push ${BACKEND_IMG}:latest
+                        """
+                    },
+                    'Frontend Image': {
+                        sh """
+                            docker build -t ${FRONTEND_IMG}:${BUILD_NUMBER} -t ${FRONTEND_IMG}:latest \
+                                --build-arg REACT_APP_API_URL=/api ./frontend
+                            docker push ${FRONTEND_IMG}:${BUILD_NUMBER}
+                            docker push ${FRONTEND_IMG}:latest
+                        """
+                    }
+                )
+            }
+        }
+
+        // ── Stage 6: Deploy to Kubernetes ─────────────────────
+        stage('Deploy K8s') {
+            when { branch 'main' }
+            steps {
+                sh """
+                    kubectl --kubeconfig=${KUBECONFIG} set image deployment/rentforge-api \
+                        api=${BACKEND_IMG}:${BUILD_NUMBER} -n ${K8S_NAMESPACE}
+                    kubectl --kubeconfig=${KUBECONFIG} set image deployment/rentforge-frontend \
+                        frontend=${FRONTEND_IMG}:${BUILD_NUMBER} -n ${K8S_NAMESPACE}
+                    kubectl --kubeconfig=${KUBECONFIG} rollout status deployment/rentforge-api -n ${K8S_NAMESPACE}
+                    kubectl --kubeconfig=${KUBECONFIG} rollout status deployment/rentforge-frontend -n ${K8S_NAMESPACE}
+                """
+                echo "✅ Deployed build #${BUILD_NUMBER} to production"
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "🚀 Pipeline #${BUILD_NUMBER} succeeded!"
+            mail(
+                to: 'team@rentforge.io',
+                subject: "✅ Build #${BUILD_NUMBER} Succeeded — ${env.JOB_NAME}",
+                body: "Build ${BUILD_NUMBER} deployed to production.\nBranch: ${env.GIT_BRANCH}\nDuration: ${currentBuild.durationString}"
+            )
+        }
+        failure {
+            echo "❌ Pipeline #${BUILD_NUMBER} FAILED"
+            mail(
+                to: 'team@rentforge.io',
+                subject: "❌ Build #${BUILD_NUMBER} FAILED — ${env.JOB_NAME}",
+                body: "Build ${BUILD_NUMBER} failed.\nBranch: ${env.GIT_BRANCH}\nCheck Jenkins: ${env.BUILD_URL}"
+            )
+        }
+        always {
+            cleanWs()
+        }
+    }
+}
