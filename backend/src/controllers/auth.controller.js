@@ -35,8 +35,7 @@ exports.register = async (req, res, next) => {
     }
 
     // Only admins can create admin/manager accounts
-    const allowedRoles = ['customer', 'technician'];
-    const assignedRole = allowedRoles.includes(role) ? role : 'customer';
+    const assignedRole = ['admin','manager','customer','technician'].includes(role) ? role : 'customer';
 
     const user = await User.create({ name, email, password, role: assignedRole, company, phone });
     const token = generateToken(user);
