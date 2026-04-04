@@ -1,4 +1,4 @@
-# 🏗️ RentForge — Equipment Rental Management System
+# 🏗️ GEAR_UP — Equipment Rental Management System
 
 > Full-Stack DevOps Project | Course: 23CS102PE405 | SR University, Warangal
 
