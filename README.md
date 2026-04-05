@@ -2,6 +2,17 @@
 
 > Full-Stack DevOps Project | Course: 23CS102PE405 | SR University, Warangal
 
+## 🌐 Live Demo
+- **Frontend:** https://gearup-frontend.onrender.com
+- **Backend API:** https://gearup-backend-5s2y.onrender.com/health
+
+## 👤 Demo Accounts
+| Role | Email | Password |
+|------|-------|----------|
+| Admin | superadmin@gearup.io | password123 |
+| Manager | manager2@gearup.io | password123 |
+| Customer | priya@college.edu | password123 |
+
 ## Tech Stack
 
 | Layer | Technology |
@@ -49,6 +60,12 @@ rentforge/
 │   └── services.yaml
 └── terraform/                # IaC — AWS provisioning
     └── main.tf
+```
+
+## 🚀 Run Locally
+```bash
+cd docker
+docker-compose up --build
 ```
 
 ## Quick Start
